@@ -1,5 +1,4 @@
 import logging
-import time
 import tensorflow as tf
 
 _log = logging.getLogger('CP')
@@ -40,33 +39,80 @@ A           (M x R)
 B           (N x R)
 C           (P x R)
 
-C  0  B     (R x N x P)
+C  0  B     (P x N x R)
+
+
+
+
+
+general form:
+
+X*  =  A* (C  .  B)^T
+
+X*  = U_1* ( U_N  .  U_{N-1}  .  U_{N-2} ...  .  U_2 ) ^T
 
 
 """
 
 
 
-# super naive way
+# Simple way -- let TF compute gradients!!!
 
 
 def outer(U, V):
     """
     outer tensor product of two arbitrarily dimension tensors
-
     (i,j,k) . (l,m)  -->  (i,j,k,l,m)
-
     """
     U_ = tf.expand_dims(U, -1)
     V_ = tf.expand_dims(V,  0)
     return tf.matmul(U_, V_)
 
+def khatri_rao(components, name='reconstructed'):
+    """
+    khatri-rao product maps
+    (i,k) . (j,k) --> (i,j,k)
+
+    To do this, we first compute a bilinear tensor product
+    (i,k) . (j,k) --> (i*j, k)
+
+    Then must reshape this
+    (i*j, k) --> (i,j,k)
+
+
+    goal     (i,l) . (j,l) . (k,l) --> (i,j,k,l)
+    step 1   (i,l) . (j,l) . (k,l) --> (i*j*k, l)
+    step 2   (i*j*k, l) --> (i,j,k,l)
+
+    """
+    with tf.name_scope(name):
+        component_dims, shared_dims = zip(*[U.get_shape().as_list() for U in components])
+        if not all([ (s == shared_dims[0]) for s in shared_dims ]):
+            raise ValueError('Error, shared dimension mismatch %s' % str(shared_dims))
+
+        new_dim = np.prod(component_dims)
+        # TODO how to do this bilinear product ?!?!?!
+        bilinear = tf.Variable([new_dim, shared_dims[0]], name='bilinear')
+
+
+        final_shape = component_dims + [shared_dims[0]]
+        kr_prod = tf.reshape(final_shape, bilinear, name='khatri_rao')
+        return kr_prod
+
+
+
 def naive_cp(X, TODO):
     """
     set X* = sum_r a_1 . a_2 . a_3 ...
-
     """
-    loss = tf.reduce_sum(X)
+
+    U = TODO_init_somehow()
+
+    X_predict = khatri_rao(U, name='X_predict')
+
+    loss = tf.reduce_sum(
+
+
 
 
 
@@ -74,85 +120,6 @@ def naive_cp(X, TODO):
 
 
 
-def als(X, rank, ainit='nvecs', maxinit=500,
-        fit_method='full', conv=1e-5, dtype=np.float):
-    """
-    X : tensor_mixin
-        The tensor to be decomposed.
-    rank : int
-        Tensor rank of the decomposition.
-    init : {'random', 'nvecs'}, optional
-        The initialization method to use.
-            - random : Factor matrices are initialized randomly.
-            - nvecs : Factor matrices are initialzed via HOSVD.
-        (default 'nvecs')
-    max_iter : int, optional
-        Maximium number of iterations of the ALS algorithm.
-        (default 500)
-    fit_method : {'full', None}
-        The method to compute the fit of the factorization
-            - 'full' : Compute least-squares fit of the dense approximation of.
-                       X and X.
-            - None : Do not compute the fit of the factorization, but iterate
-                     until ``max_iter`` (Useful for large-scale tensors).
-        (default 'full')
-    conv : float
-        Convergence tolerance on difference of fit between iterations
-        (default 1e-5)
-    Returns
-    -------
-    P : ktensor
-        Rank ``rank`` factorization of X. ``P.U[i]`` corresponds to the factor
-        matrix for the i-th mode. ``P.lambda[i]`` corresponds to the weight
-        of the i-th mode.
-    fit : float
-        Fit of the factorization compared to ``X``
-    itr : int
-        Number of iterations that were needed until convergence
-    exectimes : ndarray of floats
-        Time needed for each single iteration
-
-    """
-    N = X.ndim
-    normX = norm(X)
-
-    U = _init(ainit, X, N, rank, dtype)
-    fit = 0
-    exectimes = []
-    for itr in range(maxiter):
-        tic = time.clock()
-        fitold = fit
-
-        for n in range(N):
-            Unew = X.uttkrp(U, n)
-            Y = ones((rank, rank), dtype=dtype)
-            for i in (list(range(n)) + list(range(n + 1, N))):
-                Y = Y * dot(U[i].T, U[i])
-            Unew = Unew.dot(pinv(Y))
-            # Normalize
-            if itr == 0:
-                lmbda = sqrt((Unew ** 2).sum(axis=0))
-            else:
-                lmbda = Unew.max(axis=0)
-                lmbda[lmbda < 1] = 1
-            U[n] = Unew / lmbda
-
-        # P = ktensor(U, lmbda)
-        if fit_method == 'full':
-            normresidual = normX ** 2 + P.norm() ** 2 - 2 * P.innerprod(X)
-            fit = 1 - (normresidual / normX ** 2)
-        else:
-            fit = itr
-        fitchange = abs(fitold - fit)
-        exectimes.append(time.clock() - tic)
-        _log.debug(
-            '[%3d] fit: %.5f | delta: %7.1e | secs: %.5f' %
-            (itr, fit, fitchange, exectimes[-1])
-        )
-        if itr > 0 and fitchange < conv:
-            break
-
-    return P, fit, itr, array(exectimes)
 
 
 
@@ -169,10 +136,6 @@ class KruskalTensor:
         self.shape = shape
         self.order = len(shape)
         self.rank = rank
-        self.init = init
-        self.fit_method = fit_method
-        self.max_iter = max_iter
-        self.converged = converged
         self.dtype = dtype
         self.init_random()
 
@@ -181,10 +144,11 @@ class KruskalTensor:
         Init component matrices `U` with random vals in the interval [a,b).
 
         """
-        self.U = [] * self.order
-        for n in range(0, self.order):
-            shape = (X.shape[n], rank)
-            self.U[n] = tf.random_uniform(shape, name=('U_%d' % n), minval=a, maxval=b)
+        with tf.name_scope('U'):
+            self.U = [] * self.order
+            for n in range(0, self.order):
+                shape = (self.shape[n], self.rank)
+                self.U[n] = tf.random_uniform(shape, name=str(n), minval=a, maxval=b)
 
     def cp_als(self, X, fit_method='full',
                max_iter=500, converged=1e-5):
@@ -210,16 +174,17 @@ class KruskalTensor:
                     Y = Y * tf.matmul(U[i].T, U[i])
 
                 U_new = tf.matmul(U_new, tf.pinv(Y))
+
                 # Normalize
                 if itr == 0:
-                    lamb = sqrt((U_new ** 2).sum(axis=0))
+                    lamb = tf.reduce_sum(U_new ** 2, axis=0) ** 0.5
                 else:
-                    lamb = U_new.max(axis=0)
+                    lamb = tf.reduce_max(U_new, axis=0)
                     lamb[lamb < 1] = 1
                 self.U[n] = U_new / lamb
 
             if fit_method == 'full':
-                normresidual = norm_X ** 2 + P.norm() ** 2 - 2 * P.inner_prod(X)
+                normresidual = norm_X ** 2 + self.norm() ** 2 - 2 * self.inner_prod(X)
                 fit = 1 - (normresidual / norm_X ** 2)
             else:
                 fit = itr
