@@ -49,6 +49,13 @@ X*  = U_1* ( U_N  .  U_{N-1}  .  U_{N-2} ...  .  U_2 ) ^T
 import numpy as np
 import tensorflow as tf
 
+from tqdm import tqdm, trange
+
+
+import logging
+logging.basicConfig(filename='loss.log', level=logging.DEBUG)
+_log = logging.getLogger('CP')
+
 
 def frobenius(X):
     return tf.reduce_sum(X ** 2) ** 0.5
@@ -128,8 +135,8 @@ class KruskalTensor:
             self.U = [None] * self.order
             for n in range(0, self.order):
                 shape = (self.shape[n], self.rank)
-                self.U[n] = tf.random_uniform(shape, name=str(n),
-                                              minval=a, maxval=b, dtype=self.dtype)
+                self.U[n] = tf.Variable(tf.random_uniform(
+                    shape, minval=a, maxval=b, dtype=self.dtype), name=str(n))
 
     def init_reconstruct(self):
         """
@@ -190,8 +197,8 @@ class KruskalTensor:
           M.cp_als(X, tf.train.AdagradOptimzer(0.01), epochs=10)
 
         """
-        get_vars = lambda n: tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'U/%s' + str(n))
-        minimizer = lambda cost, n: optimizer.minimize(cost, var_list=get_vars(n))
+        # get_vars = lambda n: tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.U[n])
+        minimizer = lambda cost, n: optimizer.minimize(cost, var_list=[self.U[n]])
 
         # import ipdb; ipdb.set_trace()
         X_var = tf.Variable(X)
@@ -199,21 +206,21 @@ class KruskalTensor:
 
         init_op = tf.global_variables_initializer()
 
-        with tf.Session(config=tf.ConfigProto()) as sess:
+        with tf.Session() as sess:
             sess.run(init_op)
 
-            for e in range(epochs):
-                # for n in shuffled(range(self.order)):
-                for train_op, loss in shuffled(train_ops):
-                    # train_op, loss = self.get_train_op(X_var, minimizer, n)
+            for e in trange(epochs):
+                for alt, (train_op, loss) in enumerate(shuffled(train_ops)):
                     _, loss = sess.run([train_op, loss], feed_dict={X_var: X})
-                    print 'loss: %s' % str(loss)
+                    _log.debug('[%3d:%3d] loss: %.5f' % (e, alt, loss))
+
+            print 'final loss: %.5f' % loss
+            return sess.run(self.X_predict)
 
 
 
 
-
-
+# TODO remember that U_1 is actually U_1 * Lambda   -- will this cause any issues?
 
 
 
