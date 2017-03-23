@@ -48,11 +48,7 @@ X*  = U_1* ( U_N  .  U_{N-1}  .  U_{N-2} ...  .  U_2 ) ^T
 
 import numpy as np
 import tensorflow as tf
-from tqdm import trange
-
-import logging
-logging.basicConfig(filename='loss.log', level=logging.DEBUG)
-_log = logging.getLogger('CP')
+from dtensor import DecomposedTensor
 
 
 def shuffled(ls):
@@ -100,7 +96,7 @@ def bilinear(A, B):
     return A_tiled * B_tiled
 
 
-class KruskalTensor:
+class KruskalTensor(DecomposedTensor):
     """
     Used for CP decomposition of a tensor.
 
@@ -152,11 +148,11 @@ class KruskalTensor:
         with tf.name_scope('X'):
             reduced = reduce(bilinear, self.U[1:][::-1])
             rs = reduced.shape.as_list()
-            reshaped = tf.reshape(reduced, [np.prod(rs[:-1]), rs[-1]])
+            reduced = tf.reshape(reduced, [np.prod(rs[:-1]), rs[-1]])
 
             u0 = tf.matmul(self.U[0], tf.diag(self.Lambda))
             with tf.name_scope('interpolate'):
-                interpolated = tf.matmul(u0, tf.transpose(reshaped))
+                interpolated = tf.matmul(u0, tf.transpose(reduced))
 
             self.X = tf.reshape(interpolated, self.shape, name='reshape')
 
@@ -185,24 +181,3 @@ class KruskalTensor:
         train_ops = min_U + [min_Lambda]
 
         return loss_op, train_ops
-
-    def cp_als(self, X_data, optimizer, epochs=10):
-        """
-        Use alt. least-squares to find the CP decomposition of tensor `X`.
-
-        """
-        X_var = tf.Variable(X_data)
-        loss_op, train_ops = self.get_train_ops(X_var, optimizer)
-
-        init_op = tf.global_variables_initializer()
-
-        with tf.Session() as sess:
-            sess.run(init_op)
-
-            for e in trange(epochs):
-                for alt, train_op in enumerate(shuffled(train_ops)):
-                    _, loss = sess.run([train_op, loss_op], feed_dict={X_var: X_data})
-                    _log.debug('[%3d:%3d] loss: %.5f' % (e, alt, loss))
-
-            print 'final loss: %.5f' % loss
-            return sess.run(self.X)
