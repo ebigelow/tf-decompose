@@ -48,41 +48,32 @@ X*  = U_1* ( U_N  .  U_{N-1}  .  U_{N-2} ...  .  U_2 ) ^T
 
 import numpy as np
 import tensorflow as tf
-
-from tqdm import tqdm, trange
-
+from tqdm import trange
 
 import logging
 logging.basicConfig(filename='loss.log', level=logging.DEBUG)
 _log = logging.getLogger('CP')
 
 
-def frobenius(X):
-    return tf.reduce_sum(X ** 2) ** 0.5
-
 def shuffled(ls):
     return sorted(list(ls), key=lambda _: np.random.rand())
 
+def frobenius(X):
+    return tf.reduce_sum(X ** 2) ** 0.5
 
 def bilinear(A, B):
     """
-    TODO: describe
-    * handles if i,j are lists of indices (i.e. A/B are tensors)
+    Return the bilinear tensor product of two tensors A,B.
 
-    C_ijk = A_ik       B_jk
-          = A'_ijk  *  B'_ijk
+    Note that A,B must share their final dimension, all other
+      dimensions are used for the bilinear product.
 
-    Table of tensor shapes
-    ------------------------------------------------------------
-      A   .   B          return
-    (i,k) . (j,k)    =>  (i,j,k)
-    ------------------------------------------------------------
-    (i,k)            =>  (i,1,k)        # expand dims
-    (j,k)            =>  (1,j,k)
-    (i,1,k)          =>  (i,j,k)        # tile expanded
-    (1,j,k)          =>  (i,j,k)
-    (i,j,k) .* (i,j,k)                  # elem-wise multiply
-    ------------------------------------------------------------
+    C_ijk = A_ik    *  B_jk      (i,j,k index of C is equal to A_ik times B_jk )
+          = A'_ijk  *  B'_ijk    (tiling A,B along along respective first axis)
+
+    Tensor shapes (where i and j may refer to lists of indices):
+          A      B           C
+        (i,k)  (j,k)  =>  (i,j,k)
     """
     a_shape, a_order = (A.get_shape().as_list(), len(A.get_shape()))
     b_shape, b_order = (B.get_shape().as_list(), len(B.get_shape()))
@@ -109,7 +100,6 @@ def bilinear(A, B):
     return A_tiled * B_tiled
 
 
-
 class KruskalTensor:
     """
     Used for CP decomposition of a tensor.
@@ -131,6 +121,9 @@ class KruskalTensor:
         Init component matrices `U` with random vals in the interval [a,b).
 
         """
+        self.Lambda = tf.Variable(tf.random_uniform(
+            (self.rank, self.rank), a, b, self.dtype), name='Lambda')
+
         with tf.name_scope('U'):
             self.U = [None] * self.order
             for n in range(0, self.order):
@@ -147,62 +140,40 @@ class KruskalTensor:
           don't have to tile `self.order` full component tensors, each with
           `self.shape` dimensionality.
 
-
-        Table of tensor shapes:
-        ---------------------------------------------------------------------------------
-        (i,r) . (j,r) . (k,r)    =>  (i,j,k)       # goal: reconstruct `X` from `self.U`
-        ---------------------------------------------------------------------------------
-        (j,r) . (k,r)            =>  (j,k,r)       # bilinear interpolation
-        (j,k,r)                  =>  (j*k,r)       # reshape
-        (i,r) . (r,j*k)          =>  (i,j*k)       # combine components
-        (i,j*k)                  =>  (i,j,k)       # reshape
-        ---------------------------------------------------------------------------------
         """
         with tf.name_scope('X_predict'):
-            # import ipdb; ipdb.set_trace()
-
             reduced = reduce(bilinear, self.U[1:][::-1])
             rs = reduced.shape.as_list()
             reshaped = tf.reshape(reduced, [np.prod(rs[:-1]), rs[-1]])
 
+            u0 = tf.matmul(self.U[0], self.Lambda)
             with tf.name_scope('interpolate'):
-                interpolated = tf.matmul(self.U[0], tf.transpose(reshaped))
+                interpolated = tf.matmul(u0, tf.transpose(reshaped))
 
             self.X_predict = tf.reshape(interpolated, self.shape, name='reshape')
 
-    def get_train_ops(self, X_var, minimizer):
+    def get_train_ops(self, X_var, optimizer):
         """
-        get optimizers   Optimizer(..., vars=[U_i])    for each i
+        Get separate optimizers for each component matrix.
 
         """
         errors = X_var - self.X_predict
-        loss = frobenius(errors)
-        return [(minimizer(loss, n), loss) for n in range(self.order)]
+        loss_op = frobenius(errors)
 
-    def get_train_op(self, X_var, minimizer, n):
-        """
-        get optimizers   Optimizer(..., vars=[U_i])    for each i
+        min_U = [ optimizer.minimize(loss_op, var_list=[self.U[n]])
+                    for n in range(self.order) ]
+        min_Lambda = optimizer.minimize(loss_op, var_list=[self.Lambda])
+        train_ops = min_U + [min_Lambda]
 
-        """
-        errors = X_var - self.X_predict
-        loss = frobenius(errors)
-        return [(minimizer(loss, n), loss) for n in range(self.order)]
+        return loss_op, train_ops
 
     def cp_als(self, X, optimizer, epochs=10):
         """
-        Example:
-          from scipy.io.matlab import loadmat
-          X = np.load('data_tensor.npy')
-          M = KruskalTensor(X.shape, rank=50)
-          M.cp_als(X, tf.train.AdagradOptimzer(0.01), epochs=10)
+        Use alt. least-squares to find the CP decomposition of tensor `X`.
 
         """
-        # get_vars = lambda n: tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.U[n])
-        minimizer = lambda cost, n: optimizer.minimize(cost, var_list=[self.U[n]])
-
-        # import ipdb; ipdb.set_trace()
         X_var = tf.Variable(X)
-        train_ops = self.get_train_ops(X_var, minimizer)
+        loss_op, train_ops = self.get_train_ops(X_var, optimizer)
 
         init_op = tf.global_variables_initializer()
 
@@ -210,65 +181,9 @@ class KruskalTensor:
             sess.run(init_op)
 
             for e in trange(epochs):
-                for alt, (train_op, loss) in enumerate(shuffled(train_ops)):
-                    _, loss = sess.run([train_op, loss], feed_dict={X_var: X})
+                for alt, train_op in enumerate(shuffled(train_ops)):
+                    _, loss = sess.run([train_op, loss_op], feed_dict={X_var: X})
                     _log.debug('[%3d:%3d] loss: %.5f' % (e, alt, loss))
 
             print 'final loss: %.5f' % loss
             return sess.run(self.X_predict)
-
-
-
-
-# TODO remember that U_1 is actually U_1 * Lambda   -- will this cause any issues?
-
-
-
-
-
-
-# # ========================================================================================================
-#
-# def unfold(X, shape, n):
-#     """
-#     Unfold a TF tensor of shape (d_1, d_2, ..., d_N)
-#         into a matrix   (d_n, D' )
-#         where    D' = d_1 * d_2 * ... * d_n-1 * d_n+1 * ... * d_N
-#     """
-#     s = shape[n]
-#     d1 = tf.prod(shape[:n])
-#     d2 = tf.prod(shape[(n+1):])
-#
-#     X_ = tf.reshape(X, [d1, s, d2])
-#     return tf.reshape(X_, [s, d1*d2])   # TODO this and the line above it are likely to break
-#
-# def init_nvecs(X, rank, do_flipsign=True):
-#     """
-#     Eigendecomposition of mode-n unfolding of a tensor
-#
-#     TODO
-#     - will there be issues if we don't handle sparsity specially?
-#     """
-#     Y = tf.matmul(X, X.T)
-#
-#     N = Y.shape[0]
-#     _, U = eigh(Y, )
-#     # reverse order of eigenvectors such that eigenvalues are decreasing
-#     U = array(U[:, ::-1])
-#     # flip sign
-#     if do_flipsign:
-#         U = flipsign(U)
-#
-#     n_eigvals = (N - rank, N - 1)
-#
-#     e,v = tf.self.adjoint_eig(X)
-#     return e
-
-def outer(U, V):
-    """
-    outer tensor product of two arbitrarily dimension tensors
-    (i,j,k) . (l,m)  -->  (i,j,k,l,m)
-    """
-    U_ = tf.expand_dims(U, -1)
-    V_ = tf.expand_dims(V,  0)
-    return tf.matmul(U_, V_)
