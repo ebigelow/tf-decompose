@@ -107,22 +107,30 @@ class KruskalTensor:
     There will be a little messiness at some points because tf.einsum doesn't allow
       sloppy formatting, e.g. `tf.einsum('i...', '...i')`
 
+    TODO
+    ----
+    - normalize
+    - nvec initialization (difficult)
+    - batch option for tensors too big to fit on GPU (how to do this?)
+
     """
-    def __init__(self, shape, rank, init='random', dtype=tf.float64):
+    def __init__(self, shape, rank, regularize=1e-5, init='random', dtype=tf.float64):
         self.shape = shape
         self.order = len(shape)
         self.rank  = rank
+        self.regularize = regularize
         self.dtype = dtype
         self.init_random()
         self.init_reconstruct()
+        self.init_norm()
 
     def init_random(self, a=0.0, b=1.0):
         """
-        Init component matrices `U` with random vals in the interval [a,b).
+        Init component matrices with random vals in the interval [a,b).
 
         """
         self.Lambda = tf.Variable(tf.random_uniform(
-            (self.rank, self.rank), a, b, self.dtype), name='Lambda')
+            [self.rank], a, b, self.dtype), name='Lambda')
 
         with tf.name_scope('U'):
             self.U = [None] * self.order
@@ -133,7 +141,7 @@ class KruskalTensor:
 
     def init_reconstruct(self):
         """
-        Reconstruct predicted data tensor `X` with components `self.U`.
+        Initialize variable for reconstructed tensor `X` with components `U`.
 
         We first compute a bilinear interpolation (Khatri-Rao column-wise tensor
           product), then reshape the output. Note that we use `reduce` so we
@@ -141,24 +149,35 @@ class KruskalTensor:
           `self.shape` dimensionality.
 
         """
-        with tf.name_scope('X_predict'):
+        with tf.name_scope('X'):
             reduced = reduce(bilinear, self.U[1:][::-1])
             rs = reduced.shape.as_list()
             reshaped = tf.reshape(reduced, [np.prod(rs[:-1]), rs[-1]])
 
-            u0 = tf.matmul(self.U[0], self.Lambda)
+            u0 = tf.matmul(self.U[0], tf.diag(self.Lambda))
             with tf.name_scope('interpolate'):
                 interpolated = tf.matmul(u0, tf.transpose(reshaped))
 
-            self.X_predict = tf.reshape(interpolated, self.shape, name='reshape')
+            self.X = tf.reshape(interpolated, self.shape, name='reshape')
+
+    def init_norm(self):
+        """
+        Efficient computation of norm for `KruskalTensor`.
+
+        """
+        U = tf.Variable(tf.ones((self.rank, self.rank), dtype=self.dtype))
+        for n in range(self.order):
+            U *= tf.matmul(tf.transpose(self.U[n]), self.U[n])
+
+        self.norm = tf.matmul(tf.matmul(self.Lambda[None, ...], U), self.Lambda[..., None])
 
     def get_train_ops(self, X_var, optimizer):
         """
         Get separate optimizers for each component matrix.
 
         """
-        errors = X_var - self.X_predict
-        loss_op = frobenius(errors)
+        errors = X_var - self.X
+        loss_op = frobenius(errors) + (self.regularize * self.norm)
 
         min_U = [ optimizer.minimize(loss_op, var_list=[self.U[n]])
                     for n in range(self.order) ]
@@ -167,12 +186,12 @@ class KruskalTensor:
 
         return loss_op, train_ops
 
-    def cp_als(self, X, optimizer, epochs=10):
+    def cp_als(self, X_data, optimizer, epochs=10):
         """
         Use alt. least-squares to find the CP decomposition of tensor `X`.
 
         """
-        X_var = tf.Variable(X)
+        X_var = tf.Variable(X_data)
         loss_op, train_ops = self.get_train_ops(X_var, optimizer)
 
         init_op = tf.global_variables_initializer()
@@ -182,8 +201,8 @@ class KruskalTensor:
 
             for e in trange(epochs):
                 for alt, train_op in enumerate(shuffled(train_ops)):
-                    _, loss = sess.run([train_op, loss_op], feed_dict={X_var: X})
+                    _, loss = sess.run([train_op, loss_op], feed_dict={X_var: X_data})
                     _log.debug('[%3d:%3d] loss: %.5f' % (e, alt, loss))
 
             print 'final loss: %.5f' % loss
-            return sess.run(self.X_predict)
+            return sess.run(self.X)
