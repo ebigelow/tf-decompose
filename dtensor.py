@@ -15,7 +15,7 @@ def shuffled(ls):
 
 class DecomposedTensor:
     """
-    Used for CP & Tucker decomposition of a tensor.
+    Represent CP / Tucker decomposition of a tensor in TensorFlow.
 
     """
 

@@ -48,11 +48,28 @@ X*  = U_1* ( U_N  .  U_{N-1}  .  U_{N-2} ...  .  U_2 ) ^T
 
 import numpy as np
 import tensorflow as tf
+from scipy.linalg import eigh
 from dtensor import DecomposedTensor
 
 
-def shuffled(ls):
-    return sorted(list(ls), key=lambda _: np.random.rand())
+def unfold_numpy(arr, ax):
+    """
+    https://gist.github.com/nirum/79d8e14da106c77c02c1
+    """
+    return np.rollaxis(arr, ax, 0).reshape(arr.shape[ax], -1)
+
+def nvecs(X, rank, n):
+    """
+    TODO: describe
+    """
+    X_ = unfold_numpy(X, n)
+    Y = X_.dot(X_.T)
+    N = Y.shape[0]
+
+    _, U = eigh(Y, eigvals=(N - rank, N - 1))
+    # reverse order of eigenvectors such that eigenvalues are decreasing
+    U = np.array(U[:, ::-1])
+    return U
 
 def frobenius(X):
     return tf.reduce_sum(X ** 2) ** 0.5
@@ -96,6 +113,7 @@ def bilinear(A, B):
     return A_tiled * B_tiled
 
 
+
 class KruskalTensor(DecomposedTensor):
     """
     Used for CP decomposition of a tensor.
@@ -105,22 +123,23 @@ class KruskalTensor(DecomposedTensor):
 
     TODO
     ----
-    - normalize
-    - nvec initialization (difficult)
+    - nvec initialization
+    - compute fit as in sktensor
     - batch option for tensors too big to fit on GPU (how to do this?)
 
     """
-    def __init__(self, shape, rank, regularize=1e-5, init='random', dtype=tf.float64):
+    def __init__(self, shape, rank, regularize=1e-5,
+                 dtype=tf.float64, init='random', X_data=None):
         self.shape = shape
         self.order = len(shape)
         self.rank  = rank
         self.regularize = regularize
         self.dtype = dtype
-        self.init_random()
+        self.init_components(init, X_data)
         self.init_reconstruct()
         self.init_norm()
 
-    def init_random(self, a=0.0, b=1.0):
+    def init_components(self, init, X_data, a=0.0, b=1.0):
         """
         Init component matrices with random vals in the interval [a,b).
 
@@ -131,9 +150,14 @@ class KruskalTensor(DecomposedTensor):
         with tf.name_scope('U'):
             self.U = [None] * self.order
             for n in range(0, self.order):
-                shape = (self.shape[n], self.rank)
-                self.U[n] = tf.Variable(tf.random_uniform(
-                    shape, minval=a, maxval=b, dtype=self.dtype), name=str(n))
+
+                if init == 'nvecs':
+                    init_val = nvecs(X_data, self.rank, n)
+                elif init == 'random':
+                    shape = (self.shape[n], self.rank)
+                    init_val = np.random.uniform(low=a, high=b, size=shape)
+
+                self.U[n] = tf.Variable(init_val, name=str(n), dtype=self.dtype)
 
     def init_reconstruct(self):
         """
