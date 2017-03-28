@@ -51,8 +51,31 @@ import tensorflow as tf
 from scipy.linalg import eigh
 from dtensor import DecomposedTensor
 
+from tqdm import trange
+import logging
+logging.basicConfig(filename='loss.log', level=logging.DEBUG)
+_log = logging.getLogger('CP')
 
-def unfold_numpy(arr, ax):
+
+def shuffled(ls):
+    return sorted(list(ls), key=lambda _: np.random.rand())
+
+def unfold_tf(A, n):
+    """
+    Unfold a TF tensor of shape (d_1, d_2, ..., d_N)
+        into a matrix   (d_n, D' )
+        where    D' = d_1 * d_2 * ... * d_n-1 * d_n+1 * ... * d_N
+    """
+    shape = A.get_shape().as_list()
+    idxs = [i for i,_ in enumerate(shape)]
+
+    new_idxs = [n] + idxs[:n] + idxs[(n+1):]
+    B = tf.transpose(A, new_idxs)
+
+    dim = shape[n]
+    return tf.reshape(B, [dim, -1])
+
+def unfold_np(arr, ax):
     """
     https://gist.github.com/nirum/79d8e14da106c77c02c1
     """
@@ -62,7 +85,7 @@ def nvecs(X, rank, n):
     """
     TODO: describe
     """
-    X_ = unfold_numpy(X, n)
+    X_ = unfold_np(X, n)
     Y = X_.dot(X_.T)
     N = Y.shape[0]
 
@@ -71,8 +94,6 @@ def nvecs(X, rank, n):
     U = np.array(U[:, ::-1])
     return U
 
-def frobenius(X):
-    return tf.reduce_sum(X ** 2) ** 0.5
 
 def bilinear(A, B):
     """
@@ -182,7 +203,7 @@ class KruskalTensor(DecomposedTensor):
 
     def init_norm(self):
         """
-        Efficient computation of norm for `KruskalTensor`.
+        Efficient computation of norm for `KruskalTensor` (see Bader & Kolda).
 
         """
         U = tf.Variable(tf.ones((self.rank, self.rank), dtype=self.dtype))
@@ -197,11 +218,72 @@ class KruskalTensor(DecomposedTensor):
 
         """
         errors = X_var - self.X
-        loss_op = frobenius(errors) + (self.regularize * self.norm)
+        loss_op = tf.reduce_sum(errors ** 2)  + (self.regularize * self.norm)
+
+        ## This is how they do it in sktensor?
+        # normX =  tf.reduce_sum(X_var ** 2)
+        # normresidual = normX  +  self.norm**2 - 2 * tf.reduce_sum(self.X * X_var)
+        # loss_op = (normresidual / normX)
 
         min_U = [ optimizer.minimize(loss_op, var_list=[self.U[n]])
                     for n in range(self.order) ]
         min_Lambda = optimizer.minimize(loss_op, var_list=[self.Lambda])
-        train_ops = min_U + [min_Lambda]
+        train_ops = min_U #+ [min_Lambda]  # TODO
 
         return loss_op, train_ops
+
+    def get_solution(self, X_var, n, fast_grad=True):
+        """
+        Faster way (may be less accurate):
+          U[n]* = unfold(X,n) bilinear(U[n_ =/= n])  pinv( product( [U[n_]^T . U[n_]  for n_ =/= n] ) )
+
+        Slower, more accurate
+          U[n]* = unfold(X,n) pinv( bilinear(U[n_ =/= n]) ^T )
+
+        Normalize columns of solution to implicitly represent Lambda
+          lambda_r = ||u*_r||,  u_r = u*_r / lambda_r
+
+        """
+        X_n = unfold_tf(X_var, n)
+        U_ = self.U[:n] + self.U[(n+1):]
+
+        U_bilinear = reduce(bilinear, U_[::-1])
+        U_bilinear = tf.reshape(U_bilinear, [-1, self.rank])
+
+        if fast_grad:
+            u_prod = tf.foldl(tf.multiply, [ tf.matmul(tf.transpose(u), u)  for u in U_ ])
+            fast_pinv = tf.matrix_inverse(u_prod)
+            solution = tf.matmul(tf.matmul(X_n, U_bilinear), fast_pinv)
+        else:
+            slow_pinv = tf.matrix_inverse( tf.transpose(U_bilinear) )
+            solution = tf.matmul(X_n, slow_pinv)
+
+        # Normalize columns of solution
+        lambda_r = tf.reduce_sum(solution ** 2, axis=0) ** 0.5
+        solution = solution / lambda_r
+
+        update_op = self.U[n].assign(solution)
+        return update_op
+
+    def als_solve(self, X_data, epochs=10, fast_grad=True):
+        """
+        Use alt. least-squares to find the Tucker decomposition of tensor `X`.
+
+        """
+        X_var = tf.Variable(X_data)
+        loss_op = tf.reduce_sum((X_var - self.X) ** 2)
+        init_op = tf.global_variables_initializer()
+
+        with tf.Session() as sess:
+            sess.run(init_op)
+
+            for e in trange(epochs):
+                for alt, n in enumerate(shuffled(range(self.order))):
+
+                    update_op = self.get_solution(X_var, n, fast_grad=fast_grad)
+
+                    _, loss = sess.run([update_op, loss_op], feed_dict={X_var: X_data})
+                    _log.debug('[%3d:%3d] loss: %.5f' % (e, alt, loss))
+
+            print 'final loss: %.5f' % loss
+            return sess.run(self.X)
