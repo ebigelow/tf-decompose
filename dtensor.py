@@ -13,6 +13,14 @@ def tenumerate(ls):
 def shuffled(ls):
     return sorted(list(ls), key=lambda _: np.random.rand())
 
+def get_fit(X, Y):
+    normX = (X ** 2).sum()
+    normY = (Y ** 2).sum()
+    inner = (X * Y).sum()
+
+    normresidual = normX  +  normY - 2*inner
+    return 1 - (normresidual / normX)
+
 
 class DecomposedTensor:
     """
@@ -61,16 +69,6 @@ class DecomposedTensor:
             print 'final loss: %.5f' % loss
             return sess.run(self.X)
 
-
-    def get_fit(self, X):
-        normX = tf.reduce_sum(X ** 2)
-        normY = tf.reduce_sum(self.X ** 2)
-        inner = tf.reduce_sum(X * self.X)
-
-        normresidual = normX  +  normY - 2*inner
-        return 1 - (normresidual / normX)
-
-
     def train_als_early(self, X_data, optimizer, epochs=1000, stop_freq=50, stop_thresh=1e-10):
         """
         ALS with early stopping.
@@ -91,12 +89,12 @@ class DecomposedTensor:
                     _log.debug('[%3d:%3d] loss: %.5f' % (e, alt, loss))
 
                 if e % stop_freq:
-                    fit_op = self.get_fit(X_var)
-                    fit = sess.run(fit_op, feed_dict={X_var: X_data})
+                    X_predict = sess.run(self.X)
+                    fit = get_fit(X_data, X_predict)
                     fit_change = abs(fit - fit_prev)
 
                     if fit_change < stop_thresh and e > 0:
-                        print 'Stopping early, fit_change: %.15f' % (fit_change)
+                        print 'Stopping early, fit_change: %.10f' % (fit_change)
                         break
                     fit_prev = fit
 
