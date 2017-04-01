@@ -160,14 +160,13 @@ class KruskalTensor(DecomposedTensor):
 
         with tf.name_scope('U'):
             self.U = [None] * self.order
-            for n in range(0, self.order):
 
+            for n in range(self.order):
                 if init == 'nvecs':
                     init_val = nvecs(X_data, self.rank, n)
                 elif init == 'random':
                     shape = (self.shape[n], self.rank)
                     init_val = np.random.uniform(low=a, high=b, size=shape)
-
                 self.U[n] = tf.Variable(init_val, name=str(n), dtype=self.dtype)
 
     def init_reconstruct(self):

@@ -5,10 +5,7 @@ from tqdm import trange, tqdm
 
 import logging
 logging.basicConfig(filename='loss.log', level=logging.DEBUG)
-_log = logging.getLogger('CP')
-
-def tenumerate(ls):
-    return enumerate(tqdm(ls))
+_log = logging.getLogger('decomp')
 
 def shuffled(ls):
     return sorted(list(ls), key=lambda _: np.random.rand())
@@ -48,7 +45,7 @@ class DecomposedTensor:
         """
         pass
 
-    def train_als(self, X_data, optimizer, epochs=10):
+    def train_als(self, X_data, optimizer, epochs=1000):
         """
         Use alt. least-squares to find the CP/Tucker decomposition of tensor `X`.
 
@@ -62,7 +59,7 @@ class DecomposedTensor:
             sess.run(init_op)
 
             for e in trange(epochs):
-                for alt, train_op in tenumerate(shuffled(train_ops)):
+                for alt, train_op in enumerate(shuffled(train_ops)):
                     _, loss = sess.run([train_op, loss_op], feed_dict={X_var: X_data})
                     _log.debug('[%3d:%3d] loss: %.5f' % (e, alt, loss))
 
