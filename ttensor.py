@@ -1,41 +1,16 @@
 
 
-from tqdm import trange
 import tensorflow as tf
 import numpy as np
 
 from dtensor import DecomposedTensor
-from utils import nvecs, shuffled, get_fit
+from utils import nvecs, shuffled, get_fit, refold_tf, unfold_tf
 
 import logging
 logging.basicConfig(filename='loss.log', level=logging.DEBUG)
 _log = logging.getLogger('decomp')
 
 
-def unfold(A, n):
-    """
-    Unfold a TF tensor of shape (d_1, d_2, ..., d_N)
-        into a matrix   (d_n, D' )
-        where    D' = d_1 * d_2 * ... * d_n-1 * d_n+1 * ... * d_N
-    """
-    shape = A.get_shape().as_list()
-    idxs = [i for i,_ in enumerate(shape)]
-
-    new_idxs = [n] + idxs[:n] + idxs[(n+1):]
-    B = tf.transpose(A, new_idxs)
-
-    dim = shape[n]
-    return tf.reshape(B, [dim, -1])
-
-
-def refold(A, shape, n):
-    idxs = [i for i,_ in enumerate(shape)]
-
-    shape_temp = [shape[n]] + shape[:n] + shape[(n+1):]
-    B = tf.reshape(A, shape_temp)
-
-    new_idxs = idxs[1:(n+1)] + [0] + idxs[(n+1):]
-    return tf.transpose(B, new_idxs)
 
 
 
@@ -87,9 +62,9 @@ class TuckerTensor(DecomposedTensor):
             shape[n] = self.shape[n]
             name = None if (n < self.order-1) else 'X'
 
-            Un_mul_G = tf.matmul(self.U[n], unfold(G_to_X, n))
+            Un_mul_G = tf.matmul(self.U[n], unfold_tf(G_to_X, n))
             with tf.name_scope(name):
-                G_to_X = refold(Un_mul_G, shape, n)
+                G_to_X = refold_tf(Un_mul_G, shape, n)
 
         self.X = G_to_X
 
@@ -100,8 +75,8 @@ class TuckerTensor(DecomposedTensor):
         for n in range(self.order):
             shape[n] = self.shape[n]
 
-            Un_mul_X = tf.matmul(self.U[n], unfold(X_to_G, n))
-            X_to_G = refold(Un_mul_X, shape, n)
+            Un_mul_X = tf.matmul(self.U[n], unfold_tf(X_to_G, n))
+            X_to_G = refold_tf(Un_mul_X, shape, n)
 
         return tf.assign(self.G, X_to_G)
 
@@ -117,7 +92,7 @@ class TuckerTensor(DecomposedTensor):
             sess.run(init_op)
 
             for n in shuffled(range(self.order)):
-                _,u,_ = tf.svd(unfold(X_var, n), 'svd%3d' % n)
+                _,u,_ = tf.svd(unfold_tf(X_var, n), 'svd%3d' % n)
                 svd_op = tf.assign(self.U[n], u[:self.ranks[n]])
 
                 # Set U[n] to the first ranks[n] left-singular values of X
@@ -148,9 +123,9 @@ class TuckerTensor(DecomposedTensor):
             shape[n_] = self.shape[n_]
             name = None if (n_ < idxs[-1]) else 'Y%3d' % n_
 
-            Un_mul_X = tf.matmul(self.U[n_], unfold(Y, n_))
+            Un_mul_X = tf.matmul(self.U[n_], unfold_tf(Y, n_))
             with tf.name_scope(name):
-                Y = refold(Un_mul_X, shape, n_)
+                Y = refold_tf(Un_mul_X, shape, n_)
 
         return Y
 
@@ -169,7 +144,7 @@ class TuckerTensor(DecomposedTensor):
 
                     # Get SVD for G tensor-product with all U except U[n]
                     Y = self.get_ortho_iter(X_var, n)
-                    _,u,_ = tf.svd(unfold(Y, n), 'svd%3d' % n)
+                    _,u,_ = tf.svd(unfold_tf(Y, n), 'svd%3d' % n)
                     svd_op = tf.assign(self.U[n], u[:self.ranks[n]])
 
                     # Set U[n] to the first ranks[n] left-singular values of X
@@ -190,3 +165,18 @@ class TuckerTensor(DecomposedTensor):
             _log.debug('[G] fit: %.5f' % fit)
 
             return X_predict
+
+    def get_train_ops(self, X_var, optimizer):
+        """
+        Get separate optimizers for each component U and core G.
+
+        """
+        errors = X_var - self.X
+        loss_op = tf.reduce_sum(errors ** 2)  + (self.regularize * self.norm)
+
+        min_U = [ optimizer.minimize(loss_op, var_list=[self.U[n]])
+                    for n in range(self.order) ]
+        min_G = optimizer.minimize(loss_op, var_list=[self.G])
+        train_ops = min_U + [min_G]
+
+        return loss_op, train_ops

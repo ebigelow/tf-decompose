@@ -2,21 +2,11 @@
 import numpy as np
 import tensorflow as tf
 from tqdm import trange, tqdm
+from utils import shuffled, get_fit
 
 import logging
 logging.basicConfig(filename='loss.log', level=logging.DEBUG)
 _log = logging.getLogger('decomp')
-
-def shuffled(ls):
-    return sorted(list(ls), key=lambda _: np.random.rand())
-
-def get_fit(X, Y):
-    normX = (X ** 2).sum()
-    normY = (Y ** 2).sum()
-    inner = (X * Y).sum()
-
-    normresidual = normX  +  normY - 2*inner
-    return 1 - (normresidual / normX)
 
 
 class DecomposedTensor:
