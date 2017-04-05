@@ -74,4 +74,4 @@ Bader, Brett W., and Tamara G. Kolda. "Efficient MATLAB computations with sparse
 
 Kolda, Tamara G., and Brett W. Bader. "Tensor decompositions and applications." SIAM review 51.3 (2009): 455-500.
 
-Nickel, Maximilian. [`scikit-tensor`](https://github.com/mnick/scikit-tensor)
+[`scikit-tensor`](https://github.com/mnick/scikit-tensor) by Nickel, Maximilian.

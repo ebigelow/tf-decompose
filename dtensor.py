@@ -1,7 +1,6 @@
 
-import numpy as np
 import tensorflow as tf
-from tqdm import trange, tqdm
+from tqdm import trange
 from utils import shuffled, get_fit
 
 import logging
@@ -18,21 +17,13 @@ class DecomposedTensor:
     def init_random(self, a=0.0, b=1.0):
         pass
 
-    def init_reconstruct(self):
-        """
-        Initialize variable for components of reconstructed tensor `X`.
-
-        """
+    def init_components(self):
         pass
 
     def init_norm(self):
         pass
 
     def get_train_ops(self, X_var, optimizer):
-        """
-        Get separate optimizers for each component matrix.
-
-        """
         pass
 
     def train_als(self, X_data, optimizer, epochs=1000):
