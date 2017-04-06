@@ -56,15 +56,14 @@ ALS formulation of problem:
 ### Notes on ALS gradient computation
 
 - For CP decomposition we use alternating least squares' (ALS) over component matrices, but do not compute the exact solution as in Kolda & Bader (2009) due to the computational demands of computing large matrix inversions.
-- In our tests we find inferior results to the exact solution descent method implemented in `scikit-tensor` with ~.80 vs. ~.90 fit with decomposed rank-3 tensors on the Sensory Bread dataset.
+- In our tests we find inferior results to the exact solution descent method (requires inverting potentially huge matrices) implemented in `scikit-tensor` with ~.80 vs. ~.90 fit with decomposed rank-3 tensors on the Sensory Bread dataset.
 - `tf-decompose` parallelized on GPU was approximately 20 times faster than `scikit-tensor` for a rank-200 decomposition of a random tensor with 60 million parameters.
 
 
 
 ## Tucker tensors
 
-HOSVD and HOOI implemented but not yet tested.
-
+Preliminary results: with sensory bread data, `TuckerTensor.hosvd` seems to perform quite poorly, while `TuckerTensor.hooi` and `DecomposedTensor.train_als` learn reconstructions with fit ~0.70.
 
 
 
@@ -74,4 +73,4 @@ Bader, Brett W., and Tamara G. Kolda. "Efficient MATLAB computations with sparse
 
 Kolda, Tamara G., and Brett W. Bader. "Tensor decompositions and applications." SIAM review 51.3 (2009): 455-500.
 
-[`scikit-tensor`](https://github.com/mnick/scikit-tensor) by Nickel, Maximilian.
+Nickel, Maximilian. [`scikit-tensor`](https://github.com/mnick/scikit-tensor)
