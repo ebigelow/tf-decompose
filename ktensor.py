@@ -3,7 +3,7 @@ import numpy as np
 import tensorflow as tf
 from dtensor import DecomposedTensor
 from utils import nvecs, bilinear
-
+from functools import reduce
 
 class KruskalTensor(DecomposedTensor):
     """
