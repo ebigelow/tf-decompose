@@ -74,3 +74,7 @@ Bader, Brett W., and Tamara G. Kolda. "Efficient MATLAB computations with sparse
 Kolda, Tamara G., and Brett W. Bader. "Tensor decompositions and applications." SIAM review 51.3 (2009): 455-500.
 
 Nickel, Maximilian. [`scikit-tensor`](https://github.com/mnick/scikit-tensor)
+
+<br>
+
+***Also see***: `tensorD` ([code](https://github.com/Large-Scale-Tensor-Decomposition/tensorD), [paper](https://www.sciencedirect.com/science/article/pii/S0925231218310178)). I wrote `tf-decompose` before this was available; I haven't used it, but you should check it out as well if you're considering using `tf-decompose`.
